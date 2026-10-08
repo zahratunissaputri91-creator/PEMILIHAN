@@ -12,9 +12,48 @@ export const DEFAULT_SUPABASE_CONFIG: SupabaseConfig = {
 export function getSupabaseConfig(): SupabaseConfig {
   if (typeof window === 'undefined') return DEFAULT_SUPABASE_CONFIG;
   try {
+    // 1. Cek parameter URL (Tautan Bagikan Antar-PC: ?sb_url=...&sb_key=...)
+    const urlParams = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const urlFromParam = urlParams.get('sb_url') || hashParams.get('sb_url');
+    const keyFromParam = urlParams.get('sb_key') || hashParams.get('sb_key');
+
+    if (urlFromParam && keyFromParam) {
+      const decodedUrl = decodeURIComponent(urlFromParam);
+      const decodedKey = decodeURIComponent(keyFromParam);
+      const newCfg: SupabaseConfig = {
+        url: decodedUrl,
+        anonKey: decodedKey,
+        isEnabled: true
+      };
+      localStorage.setItem(STORAGE_KEY_SUPABASE, JSON.stringify(newCfg));
+      // Dispatch event segera
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('epilketos_supabase_config_change', { detail: newCfg }));
+      }, 50);
+      // Bersihkan param dari URL tanpa reload agar rapi
+      if (window.history.replaceState) {
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+      return newCfg;
+    }
+
+    // 2. Cek localStorage browser lokal
     const raw = localStorage.getItem(STORAGE_KEY_SUPABASE);
-    if (!raw) return DEFAULT_SUPABASE_CONFIG;
-    return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed.url && parsed.anonKey) return parsed;
+    }
+
+    // 3. Cek Environment Variables (Vite default)
+    const envUrl = (import.meta as any).env?.VITE_SUPABASE_URL;
+    const envKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY;
+    if (envUrl && envKey) {
+      return { url: envUrl, anonKey: envKey, isEnabled: true };
+    }
+
+    return DEFAULT_SUPABASE_CONFIG;
   } catch {
     return DEFAULT_SUPABASE_CONFIG;
   }
@@ -28,6 +67,11 @@ export function saveSupabaseConfig(cfg: SupabaseConfig): void {
   } catch (err) {
     console.error('Failed to save Supabase config:', err);
   }
+}
+
+export function isSupabaseConfigured(): boolean {
+  const cfg = getSupabaseConfig();
+  return Boolean(cfg.isEnabled && cfg.url && cfg.anonKey);
 }
 
 let cachedClient: SupabaseClient | null = null;
@@ -241,6 +285,8 @@ CREATE POLICY "Public Read Logs" ON audit_logs FOR SELECT USING (true);
 -- IZINKAN WRITE DARI APLIKASI
 CREATE POLICY "Public Insert Votes" ON anonymous_votes FOR INSERT WITH CHECK (true);
 CREATE POLICY "Public Update Voters" ON voters FOR UPDATE USING (true);
+CREATE POLICY "Public Manage All Anonymous Votes" ON anonymous_votes FOR ALL USING (true);
+CREATE POLICY "Public Delete Anonymous Votes" ON anonymous_votes FOR DELETE USING (true);
 CREATE POLICY "Public Manage All Schools" ON schools FOR ALL USING (true);
 CREATE POLICY "Public Manage All Periods" ON election_periods FOR ALL USING (true);
 CREATE POLICY "Public Manage All Candidates" ON candidates FOR ALL USING (true);

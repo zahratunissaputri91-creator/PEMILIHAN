@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../../lib/storage';
+import { cloudSync } from '../../lib/supabaseSync';
+import { isSupabaseConfigured } from '../../lib/supabase';
 import { School, ElectionPeriod, Candidate, Voter, AnonymousVote, ElectionCategory } from '../../types';
 import { CandidateDetailModal } from '../common/CandidateDetailModal';
+import { ResetVotesModal } from '../common/ResetVotesModal';
 import {
   Vote,
   Users,
@@ -18,7 +21,9 @@ import {
   Building,
   Check,
   Layers,
-  ShieldCheck
+  ShieldCheck,
+  RotateCcw,
+  Cloud
 } from 'lucide-react';
 
 interface Props {
@@ -37,6 +42,8 @@ export const QuickCountDashboard: React.FC<Props> = ({
   const [votes, setVotes] = useState<AnonymousVote[]>([]);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [lastRefreshed, setLastRefreshed] = useState<string>(new Date().toLocaleTimeString());
   
   // Category filter tab
@@ -62,8 +69,20 @@ export const QuickCountDashboard: React.FC<Props> = ({
     };
 
     window.addEventListener('epilketos_state_change', handleStorageChange);
+
+    // Periodik tarik data dari Supabase Cloud agar live quick count antar-PC otomatis terupdate
+    let pollTimer: any = null;
+    if (isSupabaseConfigured()) {
+      pollTimer = setInterval(() => {
+        cloudSync.pullAll().then(res => {
+          if (res.success) loadData();
+        }).catch(() => {});
+      }, 5000);
+    }
+
     return () => {
       window.removeEventListener('epilketos_state_change', handleStorageChange);
+      if (pollTimer) clearInterval(pollTimer);
     };
   }, []);
 
@@ -474,10 +493,10 @@ export const QuickCountDashboard: React.FC<Props> = ({
               </button>
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={() => setIsSimulating(!isSimulating)}
-                className={`flex-1 px-4 py-2.5 rounded-xl text-xs font-semibold border transition flex items-center justify-center gap-2 cursor-pointer ${
+                className={`px-3.5 py-2.5 rounded-xl text-xs font-semibold border transition flex items-center justify-center gap-1.5 cursor-pointer ${
                   isSimulating
                     ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 animate-pulse'
                     : 'bg-white/10 hover:bg-white/20 text-slate-200 border-white/10'
@@ -485,12 +504,21 @@ export const QuickCountDashboard: React.FC<Props> = ({
                 title="Simulasi otomatis mencoblos kedua kategori secara berkala"
               >
                 <Sparkles className="w-4 h-4 text-amber-400" />
-                {isSimulating ? 'Hentikan Simulasi' : 'Uji Simulasi Live'}
+                <span>{isSimulating ? 'Hentikan Simulasi' : 'Uji Simulasi Live'}</span>
+              </button>
+
+              <button
+                onClick={() => setIsResetModalOpen(true)}
+                className="px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/35 text-rose-200 border border-rose-400/30 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                title="Kosongkan seluruh suara testing agar kotak suara kembali 0"
+              >
+                <RotateCcw className="w-4 h-4 text-rose-300" />
+                <span>Kosongkan Suara Testing</span>
               </button>
 
               <button
                 onClick={onNavigateToPrd}
-                className="px-4 py-2.5 rounded-xl text-xs font-semibold bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 transition flex items-center justify-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-400/30 transition flex items-center justify-center gap-1.5 cursor-pointer"
                 title="Buka Dokumen PRD & Arsitektur Keamanan"
               >
                 <Info className="w-4 h-4" />
@@ -660,6 +688,26 @@ export const QuickCountDashboard: React.FC<Props> = ({
           }}
           showVoteButton={activePeriod.status === 'aktif'}
         />
+      )}
+
+      {/* Modal Kosongkan Kotak Suara Uji Coba */}
+      <ResetVotesModal
+        isOpen={isResetModalOpen}
+        onClose={() => setIsResetModalOpen(false)}
+        onSuccess={(stats) => {
+          loadData();
+          setNotice(`Kotak suara berhasil dikosongkan! (${stats.countVotesReset} suara dibersihkan, ${stats.countVotersReset} pemilih diaktifkan kembali).`);
+          setTimeout(() => setNotice(null), 5000);
+        }}
+        periodId={activePeriod.id}
+      />
+
+      {/* Toast Notice */}
+      {notice && (
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 text-xs border border-slate-700 animate-in slide-in-from-bottom">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{notice}</span>
+        </div>
       )}
     </div>
   );

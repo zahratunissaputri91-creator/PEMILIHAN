@@ -335,10 +335,10 @@ export const PanitiaDashboard: React.FC<Props> = ({ onBackToHome }) => {
 
   const handleImportSampleCsv = () => {
     const samples = [
-      { nisn: '0081234051', fullName: 'Rizaldi Ahmad Syauqi', className: 'X MIPA 2', gender: 'L' as const, pin: '', electionPeriodId: activePeriod.id },
-      { nisn: '0081234052', fullName: 'Tiara Putri Azzahra', className: 'X IPS 1', gender: 'P' as const, pin: '', electionPeriodId: activePeriod.id },
-      { nisn: '0081234053', fullName: 'Wahyu Hidayatullah', className: 'XI MIPA 3', gender: 'L' as const, pin: '', electionPeriodId: activePeriod.id },
-      { nisn: '0081234054', fullName: 'Zahra Amelia Santoso', className: 'XII IPS 2', gender: 'P' as const, pin: '', electionPeriodId: activePeriod.id }
+      { nis: '0081234051', nisn: '0081234051', fullName: 'Rizaldi Ahmad Syauqi', className: 'X MIPA 2', gender: 'L' as const, pin: '', electionPeriodId: activePeriod.id },
+      { nis: '0081234052', nisn: '0081234052', fullName: 'Tiara Putri Azzahra', className: 'X IPS 1', gender: 'P' as const, pin: '', electionPeriodId: activePeriod.id },
+      { nis: '0081234053', nisn: '0081234053', fullName: 'Wahyu Hidayatullah', className: 'XI MIPA 3', gender: 'L' as const, pin: '', electionPeriodId: activePeriod.id },
+      { nis: '0081234054', nisn: '0081234054', fullName: 'Zahra Amelia Santoso', className: 'XII IPS 2', gender: 'P' as const, pin: '', electionPeriodId: activePeriod.id }
     ];
     const added = db.importVoters(samples);
     reloadData();
@@ -357,7 +357,8 @@ export const PanitiaDashboard: React.FC<Props> = ({ onBackToHome }) => {
   // Filter DPT list
   const classes = Array.from(new Set(voters.map(v => v.className))).sort();
   const filteredVoters = voters.filter(v => {
-    const matchSearch = v.fullName.toLowerCase().includes(dptSearch.toLowerCase()) || v.nisn.includes(dptSearch);
+    const voterNis = v.nisn || v.nis || '';
+    const matchSearch = v.fullName.toLowerCase().includes(dptSearch.toLowerCase()) || voterNis.includes(dptSearch);
     const matchClass = dptClassFilter === 'ALL' || v.className === dptClassFilter;
     const matchStatus = dptStatusFilter === 'ALL' ||
       (dptStatusFilter === 'VOTED' && v.hasVoted) ||

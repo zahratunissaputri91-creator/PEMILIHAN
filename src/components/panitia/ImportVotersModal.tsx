@@ -205,6 +205,7 @@ export const ImportVotersModal: React.FC<Props> = ({
       const validRows = parsedData.filter(r => r.isValid);
       const votersToImport: Omit<Voter, 'id' | 'hasVoted'>[] = validRows.map(r => ({
         electionPeriodId: activePeriodId,
+        nis: r.nisn,
         nisn: r.nisn,
         fullName: r.fullName,
         className: r.className,

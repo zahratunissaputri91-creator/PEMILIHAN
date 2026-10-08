@@ -47,6 +47,8 @@ function safeGet<T>(key: string, defaultValue: T): T {
   }
 }
 
+const PRE_RESET_BACKUP_KEY = 'epilketos_pre_reset_backup_v1';
+
 function safeSet<T>(key: string, value: T): void {
   if (typeof window === 'undefined') return;
   try {
@@ -57,6 +59,19 @@ function safeSet<T>(key: string, value: T): void {
   }
 }
 
+// Background Supabase Sync helper without circular dependency
+function asyncSupabaseAction(fn: (client: any) => Promise<any>): void {
+  try {
+    const client = getSupabaseClient();
+    if (!client) return;
+    fn(client).catch((err: any) => {
+      console.warn('Background Supabase sync error:', err);
+    });
+  } catch (err) {
+    console.warn('Supabase client error:', err);
+  }
+}
+
 export const db = {
   // School Info
   getSchool(): School {
@@ -64,6 +79,19 @@ export const db = {
   },
   updateSchool(school: School): void {
     safeSet(STORAGE_KEYS.SCHOOL, school);
+    asyncSupabaseAction(async (client) => {
+      await client.from('schools').upsert({
+        id: school.id,
+        name: school.name,
+        type: school.type || 'OSIS',
+        npsn: school.npsn,
+        address: school.address || '',
+        principal_name: school.principalName || '',
+        principal_nip: school.principalNip || '',
+        logo_url: school.logoUrl || '',
+        academic_year_default: school.academicYearDefault || '2026/2027'
+      });
+    });
     db.addAuditLog({
       actor: 'Admin Sekolah',
       role: 'admin',
@@ -200,6 +228,24 @@ export const db = {
       all.push(candidate);
     }
     safeSet(STORAGE_KEYS.CANDIDATES, all);
+    asyncSupabaseAction(async (client) => {
+      await client.from('candidates').upsert({
+        id: candidate.id,
+        election_period_id: candidate.electionPeriodId,
+        category: candidate.category,
+        ballot_number: candidate.ballotNumber,
+        chairman_name: candidate.chairmanName,
+        chairman_class: candidate.chairmanClass,
+        vice_chairman_name: candidate.viceChairmanName || '',
+        vice_chairman_class: candidate.viceChairmanClass || '',
+        photo_url: candidate.photoUrl,
+        tagline: candidate.tagline || '',
+        vision: candidate.vision || '',
+        missions: candidate.missions || [],
+        programs: candidate.programs || [],
+        video_url: candidate.videoUrl || ''
+      });
+    });
     db.addAuditLog({
       actor: 'Panitia Pemilihan',
       role: 'panitia',
@@ -210,6 +256,9 @@ export const db = {
   deleteCandidate(id: string): void {
     const all = db.getCandidates().filter(c => c.id !== id);
     safeSet(STORAGE_KEYS.CANDIDATES, all);
+    asyncSupabaseAction(async (client) => {
+      await client.from('candidates').delete().eq('id', id);
+    });
   },
 
   // Voters
@@ -227,12 +276,28 @@ export const db = {
       all.push(voter);
     }
     safeSet(STORAGE_KEYS.VOTERS, all);
+    asyncSupabaseAction(async (client) => {
+      await client.from('voters').upsert({
+        id: voter.id,
+        election_period_id: voter.electionPeriodId,
+        nisn: voter.nis || voter.nisn || '',
+        full_name: voter.fullName,
+        class_name: voter.className,
+        gender: voter.gender || 'L',
+        pin: voter.pin,
+        has_voted: Boolean(voter.hasVoted),
+        voted_at: voter.votedAt || null
+      });
+    });
   },
   deleteVoter(id: string): void {
     const all = db.getVoters();
     const target = all.find(v => v.id === id);
     const updated = all.filter(v => v.id !== id);
     safeSet(STORAGE_KEYS.VOTERS, updated);
+    asyncSupabaseAction(async (client) => {
+      await client.from('voters').delete().eq('id', id);
+    });
     if (target) {
       db.addAuditLog({
         actor: 'Panitia Pemilihan',
@@ -242,7 +307,7 @@ export const db = {
       });
     }
   },
-  importVoters(newVoters: Omit<Voter, 'id' | 'hasVoted'>[], overwrite = false): number {
+  importVoters(newVoters: (Omit<Voter, 'id' | 'hasVoted'> | { electionPeriodId: string; nisn: string; fullName: string; className: string; gender: 'L' | 'P'; pin?: string; nis?: string })[], overwrite = false): number {
     const all = db.getVoters();
     const activePeriod = db.getActivePeriod();
 
@@ -258,13 +323,14 @@ export const db = {
 
     let count = 0;
     const timestamp = Date.now();
+    const newlyCreated: Voter[] = [];
 
     newVoters.forEach((nv, idx) => {
       const cleanNis = (nv.nis || nv.nisn || '').trim();
       if (!cleanNis) return;
       if (!existingNis.has(cleanNis)) {
         existingNis.add(cleanNis);
-        baseList.push({
+        const vObj: Voter = {
           ...nv,
           nis: cleanNis,
           nisn: cleanNis,
@@ -275,12 +341,34 @@ export const db = {
           electionPeriodId: activePeriod.id,
           pin: nv.pin && nv.pin.trim().length === 6 ? nv.pin.trim().toUpperCase() : generateSecurePin(6),
           hasVoted: false
-        });
+        };
+        baseList.push(vObj);
+        newlyCreated.push(vObj);
         count++;
       }
     });
 
     safeSet(STORAGE_KEYS.VOTERS, baseList);
+
+    if (newlyCreated.length > 0) {
+      asyncSupabaseAction(async (client) => {
+        const payload = newlyCreated.map(v => ({
+          id: v.id,
+          election_period_id: v.electionPeriodId,
+          nisn: v.nis || v.nisn || '',
+          full_name: v.fullName,
+          class_name: v.className,
+          gender: v.gender,
+          pin: v.pin,
+          has_voted: false
+        }));
+        // batch in chunks of 100
+        for (let i = 0; i < payload.length; i += 100) {
+          const chunk = payload.slice(i, i + 100);
+          await client.from('voters').upsert(chunk);
+        }
+      });
+    }
     db.addAuditLog({
       actor: 'Panitia Pemilihan',
       role: 'panitia',
@@ -418,15 +506,110 @@ export const db = {
     voter.votedAt = nowIso;
     safeSet(STORAGE_KEYS.VOTERS, allVoters);
 
+    // Sync to Supabase in background
+    asyncSupabaseAction(async (client) => {
+      const votesToInsert: any[] = [];
+      if (typeof selection === 'string') {
+        votesToInsert.push({
+          id: `vt-${baseId}-${Math.floor(Math.random() * 10000)}`,
+          election_period_id: periodId,
+          category: 'OSIS',
+          candidate_id: selection,
+          timestamp: nowIso,
+          device_fingerprint: terminalId
+        });
+      } else {
+        if (selection.osisCandidateId) {
+          votesToInsert.push({
+            id: `vt-osis-${baseId}-${Math.floor(Math.random() * 10000)}`,
+            election_period_id: periodId,
+            category: 'OSIS',
+            candidate_id: selection.osisCandidateId,
+            timestamp: nowIso,
+            device_fingerprint: terminalId
+          });
+        }
+        if (selection.mpkCandidateId) {
+          votesToInsert.push({
+            id: `vt-mpk-${baseId}-${Math.floor(Math.random() * 10000)}`,
+            election_period_id: periodId,
+            category: 'MPK',
+            candidate_id: selection.mpkCandidateId,
+            timestamp: nowIso,
+            device_fingerprint: terminalId
+          });
+        }
+      }
+
+      if (votesToInsert.length > 0) {
+        await client.from('anonymous_votes').insert(votesToInsert);
+      }
+      await client.from('voters').update({ has_voted: true, voted_at: nowIso }).eq('id', voterId);
+    });
+
     // 3. System audit trail
+    const voterNisDisplay = (voter.nisn || voter.nis || '****').substring(0, 4);
     db.addAuditLog({
       actor: `Bilik Suara (${terminalId})`,
       role: 'siswa',
-      action: `Suara Berhasil Dicoblos (OSIS & MPK) Secara Sah & Anonim (NISN: ${voter.nisn.substring(0, 4)}****)`,
+      action: `Suara Berhasil Dicoblos (OSIS & MPK) Secara Sah & Anonim (NIS: ${voterNisDisplay}****)`,
       status: 'SUCCESS'
     });
 
     return { success: true, message: 'Suara sah Anda untuk Ketua OSIS & Ketua MPK berhasil tersimpan secara aman dan terenkripsi.' };
+  },
+
+  // Reset / Kosongkan Suara Uji Coba Tanpa Menghapus Data Master (Paslon & DPT Tetap Utuh)
+  resetVotesOnly(periodId?: string): { countVotesReset: number; countVotersReset: number } {
+    const targetPeriod = periodId;
+    const allVotes = db.getVotes();
+    let remainingVotes: AnonymousVote[] = [];
+    let countVotesReset = 0;
+
+    if (targetPeriod) {
+      remainingVotes = allVotes.filter(v => v.electionPeriodId !== targetPeriod);
+      countVotesReset = allVotes.length - remainingVotes.length;
+    } else {
+      countVotesReset = allVotes.length;
+      remainingVotes = [];
+    }
+    safeSet(STORAGE_KEYS.VOTES, remainingVotes);
+
+    // Reset status pemilih
+    const allVoters = db.getVoters();
+    let countVotersReset = 0;
+    const updatedVoters = allVoters.map(v => {
+      if (!targetPeriod || v.electionPeriodId === targetPeriod) {
+        if (v.hasVoted) countVotersReset++;
+        return {
+          ...v,
+          hasVoted: false,
+          votedAt: undefined
+        };
+      }
+      return v;
+    });
+    safeSet(STORAGE_KEYS.VOTERS, updatedVoters);
+
+    // Sync clear votes to Supabase in background
+    asyncSupabaseAction(async (client) => {
+      if (targetPeriod) {
+        await client.from('anonymous_votes').delete().eq('election_period_id', targetPeriod);
+        await client.from('voters').update({ has_voted: false, voted_at: null }).eq('election_period_id', targetPeriod);
+      } else {
+        await client.from('anonymous_votes').delete().neq('id', '__all__');
+        await client.from('voters').update({ has_voted: false, voted_at: null }).neq('id', '__all__');
+      }
+    });
+
+    db.addAuditLog({
+      actor: 'Panitia / Admin',
+      role: 'panitia',
+      action: `Pengosongan Kotak Suara Uji Coba (${countVotesReset} suara direset, ${countVotersReset} status pemilih dikembalikan)`,
+      status: 'WARNING'
+    });
+
+    return { countVotesReset, countVotersReset };
   },
 
   // Committee
@@ -516,8 +699,75 @@ export const db = {
     });
   },
 
+  // Snapshot Cadangan Sebelum Reset (Emergency Restore)
+  createPreResetBackup(): void {
+    if (typeof window === 'undefined') return;
+    try {
+      const snapshot = {
+        timestamp: new Date().toISOString(),
+        school: db.getSchool(),
+        periods: db.getPeriods(),
+        candidates: db.getCandidates(),
+        voters: db.getVoters(),
+        committee: db.getCommittee(),
+        users: db.getUsers(),
+        votes: db.getVotes()
+      };
+      localStorage.setItem(PRE_RESET_BACKUP_KEY, JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn('Gagal menyimpan cadangan sebelum reset:', e);
+    }
+  },
+  hasPreResetBackup(): boolean {
+    if (typeof window === 'undefined') return false;
+    return Boolean(localStorage.getItem(PRE_RESET_BACKUP_KEY));
+  },
+  getPreResetBackupInfo(): { timestamp: string; candidatesCount: number; votersCount: number; schoolName: string } | null {
+    if (typeof window === 'undefined') return null;
+    try {
+      const raw = localStorage.getItem(PRE_RESET_BACKUP_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return {
+        timestamp: parsed.timestamp || '',
+        candidatesCount: parsed.candidates?.length || 0,
+        votersCount: parsed.voters?.length || 0,
+        schoolName: parsed.school?.name || 'Sekolah'
+      };
+    } catch {
+      return null;
+    }
+  },
+  restorePreResetBackup(): { success: boolean; message: string } {
+    if (typeof window === 'undefined') return { success: false, message: 'Browser tidak tersedia.' };
+    try {
+      const raw = localStorage.getItem(PRE_RESET_BACKUP_KEY);
+      if (!raw) return { success: false, message: 'Tidak ditemukan data cadangan sebelum reset.' };
+      const parsed = JSON.parse(raw);
+      if (parsed.school) safeSet(STORAGE_KEYS.SCHOOL, parsed.school);
+      if (parsed.periods) safeSet(STORAGE_KEYS.PERIODS, parsed.periods);
+      if (parsed.candidates) safeSet(STORAGE_KEYS.CANDIDATES, parsed.candidates);
+      if (parsed.voters) safeSet(STORAGE_KEYS.VOTERS, parsed.voters);
+      if (parsed.committee) safeSet(STORAGE_KEYS.COMMITTEE, parsed.committee);
+      if (parsed.users) safeSet(STORAGE_KEYS.USERS, parsed.users);
+      if (parsed.votes) safeSet(STORAGE_KEYS.VOTES, parsed.votes);
+      db.addAuditLog({
+        actor: 'Admin',
+        role: 'admin',
+        action: 'Pemulihan Cadangan Sebelum Reset Demo Berhasil (Data Dikembalikan Utuh)',
+        status: 'SUCCESS'
+      });
+      return { success: true, message: 'Data sebelum reset demo berhasil dipulihkan secara utuh!' };
+    } catch (err: any) {
+      return { success: false, message: `Gagal memulihkan cadangan: ${err?.message || err}` };
+    }
+  },
+
   // Reset to default
   resetToDefault(): void {
+    // 1. Simpan cadangan snapshot sebelum di-reset agar user bisa memulihkannya jika kepencet!
+    db.createPreResetBackup();
+
     safeSet(STORAGE_KEYS.SCHOOL, INITIAL_SCHOOL);
     safeSet(STORAGE_KEYS.PERIODS, INITIAL_PERIODS);
     safeSet(STORAGE_KEYS.CANDIDATES, INITIAL_CANDIDATES);
@@ -529,7 +779,7 @@ export const db = {
     db.addAuditLog({
       actor: 'Sistem',
       role: 'system',
-      action: 'Inisialisasi Ulang Database Default (E-Pilketos)',
+      action: 'Inisialisasi Ulang Database Default (E-Pilketos) - Cadangan snapshot otomatis disimpan',
       status: 'SUCCESS'
     });
   }

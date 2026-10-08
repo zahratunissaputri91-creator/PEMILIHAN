@@ -13,6 +13,9 @@ import {
   SupabaseConfig
 } from '../../types';
 import { BahpPrintModal } from '../print/BahpPrintModal';
+import { ResetVotesModal } from '../common/ResetVotesModal';
+import { cloudSync } from '../../lib/supabaseSync';
+import QRCode from 'qrcode';
 import {
   getSupabaseConfig,
   saveSupabaseConfig,
@@ -134,6 +137,11 @@ export const AdminDashboard: React.FC<Props> = ({ onBackToHome }) => {
   }>({ loading: false });
   const [isCopiedSql, setIsCopiedSql] = useState(false);
   const [isSyncingToSupabase, setIsSyncingToSupabase] = useState(false);
+  const [isPullingFromSupabase, setIsPullingFromSupabase] = useState(false);
+  const [isResetVotesModalOpen, setIsResetVotesModalOpen] = useState(false);
+  const [isResetDbModalOpen, setIsResetDbModalOpen] = useState(false);
+  const [qrCodeShareUrl, setQrCodeShareUrl] = useState('');
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
 
   // Other Modals
   const [isBahpModalOpen, setIsBahpModalOpen] = useState(false);
@@ -501,12 +509,37 @@ export const AdminDashboard: React.FC<Props> = ({ onBackToHome }) => {
     }
   };
 
-  const handleResetDatabase = () => {
-    if (confirm('PERINGATAN: Apakah Anda yakin ingin me-reset database e-Pilketos ke data awal contoh? Seluruh perubahan data akan dikembalikan ke default.')) {
-      db.resetToDefault();
-      reloadAll();
-      notify('Database berhasil direset ke setelan awal pabrik.');
+  // QR Code generator untuk link bagikan ke PC lain
+  useEffect(() => {
+    if (supabaseConfig.isEnabled && supabaseConfig.url && supabaseConfig.anonKey) {
+      const link = cloudSync.getShareableConnectLink();
+      if (link) {
+        QRCode.toDataURL(link, { width: 200, margin: 2 })
+          .then(url => setQrCodeShareUrl(url))
+          .catch(() => {});
+      }
     }
+  }, [supabaseConfig]);
+
+  const handlePullFromSupabase = async () => {
+    setIsPullingFromSupabase(true);
+    try {
+      const res = await cloudSync.pullAll();
+      reloadAll();
+      notify(res.message);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      notify(`Gagal menarik data dari Supabase: ${msg}`);
+    } finally {
+      setIsPullingFromSupabase(false);
+    }
+  };
+
+  const handleConfirmResetDatabase = () => {
+    db.resetToDefault();
+    reloadAll();
+    setIsResetDbModalOpen(false);
+    notify('Database berhasil direset ke setelan awal pabrik.');
   };
 
   // Filter audit logs
@@ -645,7 +678,16 @@ export const AdminDashboard: React.FC<Props> = ({ onBackToHome }) => {
           </button>
 
           <button
-            onClick={handleResetDatabase}
+            onClick={() => setIsResetVotesModalOpen(true)}
+            className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border border-rose-200 shadow-xs"
+            title="Kosongkan seluruh suara uji coba agar hasil kembali 0"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Kosongkan Suara Testing</span>
+          </button>
+
+          <button
+            onClick={() => setIsResetDbModalOpen(true)}
             className="px-3 py-2.5 bg-slate-100 hover:bg-red-50 hover:text-red-600 text-slate-600 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer"
             title="Reset database ke data awal contoh"
           >
@@ -1333,19 +1375,100 @@ export const AdminDashboard: React.FC<Props> = ({ onBackToHome }) => {
                 </button>
 
                 {supabaseConfig.isEnabled && supabaseConfig.url && (
-                  <button
-                    type="button"
-                    onClick={handleSyncToSupabase}
-                    disabled={isSyncingToSupabase}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingToSupabase ? 'animate-spin' : ''}`} />
-                    <span>{isSyncingToSupabase ? 'Menyinkronkan...' : 'Unggah Data Saat Ini ke Supabase'}</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleSyncToSupabase}
+                      disabled={isSyncingToSupabase}
+                      className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md cursor-pointer"
+                      title="Unggah data DPT dan Calon lokal ke Supabase Cloud"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingToSupabase ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingToSupabase ? 'Menyinkronkan...' : 'Unggah Data ke Supabase (Push)'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handlePullFromSupabase}
+                      disabled={isPullingFromSupabase}
+                      className="px-5 py-2.5 bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md cursor-pointer"
+                      title="Tarik data DPT, Calon, dan Suara terbaru dari Supabase Cloud ke browser ini"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${isPullingFromSupabase ? 'animate-spin' : ''}`} />
+                      <span>{isPullingFromSupabase ? 'Mengunduh...' : 'Tarik Data dari Cloud (Pull)'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsResetVotesModalOpen(true)}
+                      className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      title="Kosongkan seluruh suara uji coba di Supabase dan lokal"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                      <span>Kosongkan Suara Testing</span>
+                    </button>
+                  </>
                 )}
               </div>
             </form>
           </div>
+
+          {/* Bagikan Tautan Koneksi Antar-PC (Bilik Suara & Layar Proyektor) */}
+          {supabaseConfig.isEnabled && supabaseConfig.url && (
+            <div className="bg-emerald-50/70 rounded-3xl border border-emerald-200 p-6 space-y-4">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-emerald-200/80 pb-4">
+                <div>
+                  <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                    <Cloud className="w-4 h-4 text-emerald-600" />
+                    <span>Bagikan Tautan Koneksi ke Laptop Bilik Suara / PC 2</span>
+                  </h4>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Gunakan tautan atau QR Code ini agar laptop bilik suara langsung terhubung ke Supabase Cloud otomatis tanpa perlu ketik API Key manual.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center">
+                <div className="md:col-span-2 space-y-2">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Tautan Cepat Langsung Terhubung (Bilik Suara):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      value={cloudSync.getShareableConnectLink()}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl font-mono text-xs text-slate-700 select-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const link = cloudSync.getShareableConnectLink();
+                        navigator.clipboard.writeText(link);
+                        setCopiedShareLink(true);
+                        notify('Tautan koneksi berhasil disalin ke clipboard!');
+                        setTimeout(() => setCopiedShareLink(false), 2500);
+                      }}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shrink-0 shadow-xs cursor-pointer"
+                    >
+                      {copiedShareLink ? <Check className="w-3.5 h-3.5 text-emerald-200" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedShareLink ? 'Tersalin!' : 'Salin Tautan'}</span>
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    💡 Cara Penggunaan: Buka browser di PC Bilik Suara / PC 2, paste tautan ini, dan tekan Enter. PC tersebut akan langsung terhubung ke database Supabase yang sama secara otomatis!
+                  </p>
+                </div>
+
+                {qrCodeShareUrl && (
+                  <div className="flex flex-col items-center justify-center p-3 bg-white rounded-2xl border border-emerald-200 shadow-xs">
+                    <img src={qrCodeShareUrl} alt="QR Code Bilik Suara" className="w-28 h-28 rounded-lg" />
+                    <span className="text-[10px] font-bold text-slate-500 mt-1">Scan via Tablet / HP</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* 3 Langkah Mudah Mengaktifkan Supabase */}
           <div className="bg-slate-50 rounded-3xl border border-slate-200 p-6 space-y-4">
@@ -1841,6 +1964,57 @@ export const AdminDashboard: React.FC<Props> = ({ onBackToHome }) => {
           committee={committee}
           onClose={() => setIsBahpModalOpen(false)}
         />
+      )}
+
+      {/* MODAL RESET SUARA TESTING (KOSONGKAN KOTAK SUARA) */}
+      <ResetVotesModal
+        isOpen={isResetVotesModalOpen}
+        onClose={() => setIsResetVotesModalOpen(false)}
+        onSuccess={(stats) => {
+          reloadAll();
+          notify(`Kotak suara berhasil dikosongkan! (${stats.countVotesReset} suara dibersihkan, ${stats.countVotersReset} pemilih diaktifkan kembali).`);
+        }}
+        periodId={activePeriod.id}
+      />
+
+      {/* MODAL KONFIRMASI RESET TOTAL DATABASE DEFAULT (PENGGANTI WINDOW.CONFIRM) */}
+      {isResetDbModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <RotateCcw className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="font-bold text-base text-slate-900">Reset Total ke Setelan Awal Pabrik?</h3>
+              <p className="text-xs text-slate-500">
+                Peringatan: Seluruh data perubahan (DPT yang diinput, kandidat baru, suara) akan dikembalikan ke data awal contoh.
+              </p>
+            </div>
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs">
+              <p className="font-bold">Tips:</p>
+              <p className="text-[11px] mt-0.5">
+                Jika Anda hanya ingin menghapus hasil coblosan testing tanpa menghapus DPT siswa dan Calon, gunakan tombol <strong>"Kosongkan Suara Testing"</strong> saja.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsResetDbModalOpen(false)}
+                className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResetDatabase}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-md transition cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Ya, Reset Database</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

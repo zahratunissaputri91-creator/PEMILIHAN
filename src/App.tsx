@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './lib/storage';
+import { cloudSync } from './lib/supabaseSync';
+import { isSupabaseConfigured } from './lib/supabase';
 import { UserRole, School, ElectionPeriod } from './types';
 import { Header } from './components/common/Header';
 import { QuickCountDashboard } from './components/public/QuickCountDashboard';
@@ -7,13 +9,18 @@ import { VotingBooth } from './components/voting/VotingBooth';
 import { PanitiaDashboard } from './components/panitia/PanitiaDashboard';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { PrdArchitectureModal } from './components/prd/PrdArchitectureModal';
-import { ShieldCheck, Vote, Heart } from 'lucide-react';
+import { ResetVotesModal } from './components/common/ResetVotesModal';
+import { CloudSyncModal } from './components/common/CloudSyncModal';
+import { ShieldCheck, Vote, Heart, CheckCircle2 } from 'lucide-react';
 
 export default function App() {
   const [currentRole, setCurrentRole] = useState<UserRole>('publik');
   const [school, setSchool] = useState<School>(db.getSchool());
   const [activePeriod, setActivePeriod] = useState<ElectionPeriod>(db.getActivePeriod());
   const [isPrdOpen, setIsPrdOpen] = useState(false);
+  const [isResetVotesOpen, setIsResetVotesOpen] = useState(false);
+  const [isCloudSyncOpen, setIsCloudSyncOpen] = useState(false);
+  const [syncToast, setSyncToast] = useState<string | null>(null);
 
   const refreshState = () => {
     setSchool(db.getSchool());
@@ -22,18 +29,55 @@ export default function App() {
 
   useEffect(() => {
     refreshState();
+
+    // OTOMATIS TARIK DARI SUPABASE CLOUD SAAT APLIKASI DIBUKA (PENTING UNTUK ANTAR-PC)
+    const initCloudSync = async () => {
+      if (isSupabaseConfigured()) {
+        try {
+          const res = await cloudSync.pullAll();
+          if (res.success && (res.votersCount > 0 || res.candidatesCount > 0)) {
+            refreshState();
+            setSyncToast(`Data tersinkron dari Supabase Cloud (${res.votersCount} DPT, ${res.candidatesCount} Calon)`);
+            setTimeout(() => setSyncToast(null), 4000);
+          }
+        } catch (err) {
+          console.warn('Auto cloud pull on boot notice:', err);
+        }
+      }
+    };
+    initCloudSync();
+
     const handleStorageChange = () => refreshState();
+    const handleConfigChange = () => {
+      initCloudSync();
+    };
+
     window.addEventListener('epilketos_state_change', handleStorageChange);
-    return () => window.removeEventListener('epilketos_state_change', handleStorageChange);
+    window.addEventListener('epilketos_supabase_config_change', handleConfigChange);
+
+    return () => {
+      window.removeEventListener('epilketos_state_change', handleStorageChange);
+      window.removeEventListener('epilketos_supabase_config_change', handleConfigChange);
+    };
   }, []);
 
   const handleResetDemo = () => {
     db.resetToDefault();
     refreshState();
+    setSyncToast('Database direset ke contoh default pabrik.');
+    setTimeout(() => setSyncToast(null), 3000);
   };
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans selection:bg-indigo-500 selection:text-white">
+      {/* Toast Notifikasi Sinkronisasi */}
+      {syncToast && (
+        <div className="fixed top-14 right-6 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-2xl shadow-xl flex items-center gap-2.5 text-xs border border-slate-700 animate-in slide-in-from-top duration-300">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span>{syncToast}</span>
+        </div>
+      )}
+
       {/* Header Bar - Hidden in student voting booth mode for clean dedicated kiosk */}
       {currentRole !== 'siswa' && (
         <Header
@@ -43,6 +87,8 @@ export default function App() {
           onSelectRole={setCurrentRole}
           onOpenPrd={() => setIsPrdOpen(true)}
           onResetDemo={handleResetDemo}
+          onOpenCloudSync={() => setIsCloudSyncOpen(true)}
+          onOpenResetVotes={() => setIsResetVotesOpen(true)}
         />
       )}
 
@@ -80,6 +126,29 @@ export default function App() {
           onClose={() => setIsPrdOpen(false)}
         />
       )}
+
+      {/* Modal Kosongkan Kotak Suara (Reset Suara Testing) */}
+      <ResetVotesModal
+        isOpen={isResetVotesOpen}
+        onClose={() => setIsResetVotesOpen(false)}
+        onSuccess={(stats) => {
+          refreshState();
+          setSyncToast(`Kotak suara berhasil dikosongkan! (${stats.countVotesReset} suara dibersihkan, ${stats.countVotersReset} pemilih diaktifkan kembali).`);
+          setTimeout(() => setSyncToast(null), 5000);
+        }}
+        periodId={activePeriod.id}
+      />
+
+      {/* Modal Sinkronisasi Supabase Cloud & Bagikan ke PC Lain */}
+      <CloudSyncModal
+        isOpen={isCloudSyncOpen}
+        onClose={() => setIsCloudSyncOpen(false)}
+        onSyncCompleted={(msg) => {
+          refreshState();
+          setSyncToast(msg);
+          setTimeout(() => setSyncToast(null), 4000);
+        }}
+      />
 
       {/* Footer - Sembunyikan saat siswa di bilik suara untuk tampilan bersih tanpa menu distraksi */}
       {currentRole !== 'siswa' && (
